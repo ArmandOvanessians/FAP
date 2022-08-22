@@ -1,0 +1,397 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(MOFA2)
+library(MOFAdata)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(data.table)
+library(Hmisc)
+library(matrixStats)
+
+source("utils.R")
+
+
+# Meta Data
+wes_clinical <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/wes_clinical.tsv') # META DATA
+wgs_clinical <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/wgs_clinical.tsv') # META DATA
+
+exonic_mut <- read_tsv("HTAN_exonic_mutation_burden.tsv")
+FAP_SV_burden <- read_tsv("HTAN_FAP_SV_burden.tsv")
+percent_genome_altered <- read_tsv("HTAN_percent_genome_altered.tsv")
+
+
+met <- make_meta(wes_clinical, wgs_clinical, exonic_mut, FAP_SV_burden, percent_genome_altered)
+
+#head(met)
+met_stage <- met %>% dplyr::select(sample, stage)
+met_stage
+
+rna_org <- read_tsv("vst_batch_covars.stage.tsv") 
+rna_df <- make_rna_seq_df(rna_org)
+dt <- as.data.table(rna_df)
+dt
+rna_dt <- dt[, mean(value), by = list(sample, feature, view)]
+colnames(rna_dt) <- c("sample", "feature", "view", "value")
+rna_dt_fin <- rna_dt %>% dplyr::select(sample, feature, value, view)
+
+rna_df <- rna_dt_fin
+
+
+rna_df_DE <- n_most_var_df(rna_df, 466)
+
+
+
+
+wes_gene_cna <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/Filtered_wes_gene_level_cna_facets.tsv') # CNA
+wgs_gene_cna <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/Filtered_wgs_gene_level_cna_facets.tsv') # CNA
+
+
+
+CNA_original <- merge_wes_wgs_cna(wes_gene_cna, wgs_gene_cna)
+CNA_original <- as.data.frame(CNA_original)
+
+
+CNA <- n_most_var_df(CNA_original, 466)
+
+
+wes_snv_maf <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/Filtered_wes_snv_maf.tsv') # SNV
+wgs_snv_maf <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/Filtered_wgs_snv_maf.tsv') # SNV
+
+genes <- c("APC","AMER1", "TCF7L2", "CTNNB1","KRAS", "BRAF", "NRAS","TP53","FBXW7","PIK3CA", "PTEN","SMAD4", "SMAD2", "ACVR2A","GNAS","ARID1A", "SOX9", "TGIF1", "PCBP1", "ZFP36L2") # PanCancer Genes
+
+
+snv <- make_snv(wes_snv_maf, wgs_snv_maf)
+SNV <- snv_thresh(snv, 0.25)
+SNV <- SNV[!SNV$feature == 'Unknown', ]
+
+
+SNV$view <- "SNV"
+SNV <- SNV %>% dplyr::select(sample, feature, value, view)
+CNA$view <- "CNA"
+rna_df_DE$view <- "RNA"
+
+rna_df_DE
+
+mof_data <- rbind(SNV, CNA, rna_df_DE)
+
+SNV_t <- merge(SNV, met_stage)
+SNV_t <- SNV_t %>% dplyr::select(sample, feature, value, stage, view)
+colnames(SNV_t) <- c("sample", "feature", "value", "group", "view")
+
+mof_data_grouped <- merge(mof_data, met_stage)
+mof_data_grouped
+mof_data_grouped <- mof_data_grouped %>% dplyr::select(sample, feature, value, stage, view)
+colnames(mof_data_grouped) <- c("sample", "feature", "value", "group", "view")
+
+mof_data_grouped
+MOFAobject <- create_mofa(mof_data_grouped)
+plot_data_overview(MOFAobject)
+
+```
+
+
+
+
+```{r}
+data_opts <- get_default_data_options(MOFAobject)
+data_opts
+
+model_opts <- get_default_model_options(MOFAobject)
+model_opts$num_factors <- 15
+
+model_opts
+
+train_opts <- get_default_training_options(MOFAobject)
+train_opts$convergence_mode <- "slow"
+train_opts$seed <- 42
+
+train_opts
+
+
+MOFAobject <- prepare_mofa(MOFAobject,
+  data_options = data_opts,
+  model_options = model_opts,
+  training_options = train_opts
+)
+
+#MOFAobject <- run_mofa(MOFAobject, outfile="MOFA2_Group_Stage_RNA.hdf5")
+#saveRDS(MOFAobject,"MOFA2_Group_Stage_RNA.hdf5")
+
+MOFAobject <- readRDS("MOFA2_Group_Stage.hdf5")
+plot_data_overview(MOFAobject)
+```
+
+#  variance decomposition by factor, total variance explained across views   
+
+```{r}
+plot_variance_explained(MOFAobject, x="group", y="factor")
+plot_variance_explained(
+  MOFAobject, 
+  x = "group", 
+  y = "factor", 
+  plot_total = T
+)[[2]]
+```
+
+```{r}
+head(met) 
+colnames(met)[6] <- "group"
+samples_metadata(MOFAobject) <- met
+met
+```
+
+```{r}
+correlate_factors_with_covariates(MOFAobject, 
+  covariates = c("total_perMB", "log2_svc_burden", "pct_change", "Patient", "Location"), 
+  plot="log_pval"
+)
+```
+
+
+
+
+```{r}
+plot_factor(MOFAobject, 
+  factor = 1,
+  color_by = "Patient"  # lineage is a column in MOFAobject@samples.metadata
+) #+ scale_fill_manual(values=colors)
+```
+
+```{r}
+plot_factor(MOFAobject,
+  factor = 1,
+  color_by = "Patient", 
+  scale = TRUE, 
+  add_violin = TRUE, color_violin = TRUE, 
+  dodge = TRUE, dot_size = 1, legend = TRUE
+) #+ scale_color_manual(values=colors) + scale_fill_manual(values=colors)
+```
+# Factor 1 analysis via SNV view
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = mucosa
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+  view = "SNV", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Mucosa"
+)
+
+
+print(p)
+```
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = benign
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+  view = "SNV", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Benign"
+)
+
+
+print(p)
+```
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = dysplasia
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+  view = "SNV", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Dysplasia"
+)
+
+
+print(p)
+```
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = adenocarcinoma
+
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+  view = "SNV", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "AdCa"
+)
+
+
+print(p)
+```
+# Factor 1 analysis - CNA view
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = Mucosa
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "CNA", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Mucosa"
+)
+
+
+print(p)
+```
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = Benign
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "CNA", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Benign"
+)
+
+
+print(p)
+```
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = Dysplasia
+
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "CNA", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Dysplasia"
+)
+
+
+print(p)
+```
+### Factor 1 sample values vs 4 top 6 weighted genes : stage = AdCa
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "CNA", 
+  factor = 1, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "AdCa"
+)
+
+
+print(p)
+```
+# Factor 2 analysis - SNV view
+```{r}
+plot_factor(MOFAobject,
+  factor = 2,
+  color_by = "Patient", 
+  scale = TRUE, 
+  add_violin = TRUE, color_violin = TRUE, 
+  dodge = TRUE, dot_size = 1, legend = TRUE
+) #+ scale_color_manual(values=colors) + scale_fill_manual(values=colors)
+```
+
+
+### Factor 2 sample values vs 4 top 6 weighted genes : stage = Mucosa
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "SNV", 
+  factor = 2, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Mucosa"
+)
+
+
+print(p)
+```
+### Factor 2 sample values vs 4 top 6 weighted genes : stage = Benign
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "SNV", 
+  factor = 2, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Benign"
+)
+
+
+print(p)
+```
+
+### Factor 2 sample values vs 4 top 6 weighted genes : stage = Mucosa
+
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "SNV", 
+  factor = 2, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "Dysplasia"
+)
+
+
+print(p)
+```
+
+```{r}
+p <- plot_data_scatter(MOFAobject, 
+view = "SNV", 
+  factor = 2, 
+  features = 6,         # Number of features to show
+  sign = "positive",     # select top 6 features with positive weights
+  color_by = "Patient",  # color cells by lineage
+  add_lm = T,          # add linear regression estimates
+  lm_per_group = F, 
+  dot_size = 2,
+  group = "AdCa"
+)
+
+
+print(p)
+```
+
