@@ -1,0 +1,171 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(svpluscnv)
+library(dplyr)
+```
+
+```{r}
+wes_seg_cna <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/Filtered_wes_segment_level_cna_facets.tsv')
+
+wgs_seg_cna <- read_tsv('/oak/stanford/groups/ccurtis2/users/azizk/projects/FAP/data/calls_for_MOFA/Filtered_wgs_segment_level_cna_facets.tsv')
+```
+
+```{r}
+
+wes_seg <- wes_seg_cna %>% dplyr::select(Tumor_Sample_Barcode, Chromosome, Start_Position, End_Position, num.mark, SegmentMean)
+colnames(wes_seg) <- c("sample", "chrom", "start", "end", "num_markers", "seg_CN")
+
+
+wgs_seg <- wgs_seg_cna %>% dplyr::select(Tumor_Sample_Barcode, Chromosome, Start_Position, End_Position, num.mark, SegmentMean)
+colnames(wgs_seg) <- c("sample", "chrom", "start", "end", "num_markers", "seg_CN")
+
+
+wes_seg <-  subset(wes_seg, !sample %in% unique(wgs_seg$sample)) # Samples of WES where we don't have
+
+wes_seg
+
+dat <- rbind(wgs_seg, wes_seg)
+dat
+
+```
+
+```{r}
+cnv <- validate.cnv(dat)
+cnv
+```
+# CNV frequencies on whole data set
+
+```{r}
+cnv_freq <- cnv.freq(cnv, fc.pct = 0.2, ploidy = FALSE)
+```
+
+# Enrichment heat map via sample and chromosome arm
+```{r}
+charm.mat <- chr.arm.cnv(cnv, genome.v = "hg19", verbose = FALSE)
+# heatmap plot of chromosome arm level CNV
+require(gplots,quietly = TRUE,warn.conflicts = FALSE)
+heatmap.2(charm.mat[order(rownames(charm.mat))[1:42],],Rowv=NA,trace='none',cexCol=.5, lhei=c(0.25,1), dendrogram='col', key.title="Copy number",
+        col=colorRampPalette(c("blue","white","red"))(256))
+```
+# CNA analysis through stages
+```{r}
+wes_seg <- wes_seg_cna %>% dplyr::select(Tumor_Sample_Barcode, Chromosome, Start_Position, End_Position, num.mark, SegmentMean, Stage)
+colnames(wes_seg) <- c("sample", "chrom", "start", "end", "num_markers", "seg_CN", "Stage")
+
+
+wgs_seg <- wgs_seg_cna %>% dplyr::select(Tumor_Sample_Barcode, Chromosome, Start_Position, End_Position, num.mark, SegmentMean, Stage)
+colnames(wgs_seg) <- c("sample", "chrom", "start", "end", "num_markers", "seg_CN", "Stage")
+
+
+wes_seg <-  subset(wes_seg, !sample %in% unique(wgs_seg$sample)) # Samples of WES where we don't have
+
+wes_seg
+
+df <- rbind(wgs_seg, wes_seg)
+df
+```
+```{r}
+unique(df$Stage)
+```
+
+```{r}
+dys <- df[df$Stage == 'Dysplasia', ]
+adCa <- df[df$Stage == "AdCa", ]
+muc <- df[df$Stage == "Mucosa", ]
+ben <- df[df$Stage == "Benign",]
+```
+
+```{r}
+dys <- dys %>% dplyr::select(sample, chrom, start, end, num_markers, seg_CN)
+adCa <- adCa %>% dplyr::select(sample, chrom, start, end, num_markers, seg_CN)
+muc <- muc %>% dplyr::select(sample, chrom, start, end, num_markers, seg_CN)
+ben <- ben %>% dplyr::select(sample, chrom, start, end, num_markers, seg_CN)
+```
+
+```{r}
+
+cnv_dys <- validate.cnv(dys)
+cnv_ad <- validate.cnv(adCa)
+cnv_muc <- validate.cnv(muc)
+cnv_ben <- validate.cnv(ben)
+```
+
+# COPY NUMBER ALTERATIONS THROUGH STAGES
+
+### CNV Mucosa Frequencies through chromosome location
+```{r}
+cnv_freq_muc <- cnv.freq(cnv_muc, fc.pct = 0.2, ploidy = FALSE)
+
+```
+### CNV Benign Frequencies through chromosome location
+```{r}
+cnv_freq_ben <- cnv.freq(cnv_ben, fc.pct = 0.2, ploidy = FALSE)
+```
+### CNV Dysplasia Frequencies through chromosome location
+```{r}
+cnv_freq_dys <- cnv.freq(cnv_dys, fc.pct = 0.2, ploidy = FALSE)
+```
+### CNV Adenocarcinoma Frequencies through chromosome location 
+```{r}
+cnv_freq_ad <- cnv.freq(cnv_ad, fc.pct = 0.2, ploidy = FALSE)
+```
+
+```{r}
+library(taRifx)
+segdat_lung_ccle <- remove.factors(dat)
+svdat_lung_ccle <- remove.factors(svdat_lung_ccle)
+cnv <- validate.cnv(segdat_lung_ccle)
+# remove likely artifacts from segmentation data and fill gaps in the segmentation data (optional)
+cnv_clean <- clean.cnv.artifact(cnv, verbose=FALSE,n.reps = 4,fill.gaps = TRUE)  
+svc <- validate.svc(svdat_lung_ccle)
+```
+
+
+```{r}
+shatt_lung_cnv <- shattered.regions.cnv(cnv_clean, fc.pct = 0.1, verbose=FALSE)
+shatt_lung_cnv
+```
+
+```{r}
+# obtain gene level CNV data as the average log ratio of each gene's overlapping CNV segments
+genecnv_data <- gene.cnv(cnv_clean, genome.v = "hg19",fill.gaps = FALSE,verbose=FALSE)
+# retrieve amplifications and deep deletion events using a log-ratio cutoff = +- 2
+amp_del_genes <- amp.del(genecnv_data, logr.cut = 2)
+```
+
+
+```{r}
+par(mfrow=c(1,2),mar=c(4,7,1,1))
+barplot(amp_del_genes$amplified.rank[1:20],col="red",
+        las=1,main="Amplified genes",horiz=TRUE,xlab="#samples")
+barplot(amp_del_genes$deepdel.rank[1:20],col="blue",
+        las=1,main="Candidate homozigously deleted genes",horiz=TRUE,xlab="#samples")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
