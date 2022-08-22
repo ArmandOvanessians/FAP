@@ -246,7 +246,7 @@ plot_data_scatter(MOFAobject,
   features = 4,
   sign = "positive",
   color_by = "stage"
-) + labs(y="Mutations")
+) + labs(y="RNA Expression")
 ```
 
 ### Factor 3 heat map for RNA view
@@ -279,7 +279,7 @@ plot_data_scatter(MOFAobject,
   features = 4,
   sign = "negative",
   color_by = "stage"
-) + labs(y="Mutations")
+) + labs(y="RNA Expression")
 ```
 
 
@@ -400,9 +400,7 @@ writeLines(df_RNA$gene[1:30], "top_30_RNA.txt")
 # The top 30 genes of each view were pasted in to https://maayanlab.cloud/Enrichr/ to get associated wikipathways
 
 
-```{r}
 
-```
 
 
 
